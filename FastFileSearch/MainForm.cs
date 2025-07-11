@@ -104,6 +104,9 @@ namespace FastFileSearch
             statusLabel.Text = "Ready - Enter search term to begin";
             itemCountLabel.Text = "0 items";
 
+            // Add debug info
+            Text = $"Fast File Search - Running as: {Environment.UserName}";
+
             // Start indexing files in background
             if (!searchWorker.IsBusy)
             {
@@ -354,23 +357,82 @@ namespace FastFileSearch
         {
             try
             {
-                var drives = DriveInfo.GetDrives().Where(d => d.IsReady).ToList();
+                // Report progress to UI
+                this.Invoke((Action)(() =>
+                {
+                    statusLabel.Text = "Starting file indexing...";
+                }));
 
-                Parallel.ForEach(drives, drive =>
+                // Start with user directories first (more likely to succeed)
+                var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                var desktop = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
+                var documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+                var downloads = Path.Combine(userProfile, "Downloads");
+
+                // Index common user directories first
+                var userDirs = new List<string> { userProfile, desktop, documents };
+                if (Directory.Exists(downloads)) userDirs.Add(downloads);
+
+                foreach (var dir in userDirs)
                 {
                     try
                     {
-                        IndexDirectory(drive.RootDirectory);
+                        if (Directory.Exists(dir))
+                        {
+                            IndexDirectory(new DirectoryInfo(dir));
+
+                            // Update UI with progress
+                            this.Invoke((Action)(() =>
+                            {
+                                statusLabel.Text = $"Indexing... Found {allFiles.Count} files, {allDirectories.Count} directories";
+                            }));
+                        }
                     }
-                    catch (Exception)
+                    catch (Exception ex)
                     {
-                        // Skip drives that can't be accessed
+                        // Log the specific error
+                        this.Invoke((Action)(() =>
+                        {
+                            statusLabel.Text = $"Warning: Could not index {dir} - {ex.Message}";
+                        }));
                     }
-                });
+                }
+
+                // Then try system drives (C:, D:, etc.) - skip if no permission
+                var drives = DriveInfo.GetDrives().Where(d => d.IsReady && d.DriveType == DriveType.Fixed).ToList();
+
+                foreach (var drive in drives)
+                {
+                    try
+                    {
+                        // Skip if we already indexed this drive via user directories
+                        if (userDirs.Any(ud => ud.StartsWith(drive.Name, StringComparison.OrdinalIgnoreCase)))
+                            continue;
+
+                        IndexDirectory(drive.RootDirectory);
+
+                        this.Invoke((Action)(() =>
+                        {
+                            statusLabel.Text = $"Indexing {drive.Name}... Found {allFiles.Count} files, {allDirectories.Count} directories";
+                        }));
+                    }
+                    catch (Exception ex)
+                    {
+                        this.Invoke((Action)(() =>
+                        {
+                            statusLabel.Text = $"Warning: Could not index drive {drive.Name} - {ex.Message}";
+                        }));
+                    }
+                }
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Error indexing files: {ex.Message}");
+                this.Invoke((Action)(() =>
+                {
+                    statusLabel.Text = $"Indexing error: {ex.Message}";
+                    MessageBox.Show($"Error during file indexing: {ex.Message}\n\nTry running as administrator for full system access.",
+                        "Indexing Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }));
             }
         }
 
@@ -380,9 +442,21 @@ namespace FastFileSearch
             {
                 if (searchWorker.CancellationPending) return;
 
-                // Skip system and hidden directories for performance
-                if ((dir.Attributes & FileAttributes.System) == FileAttributes.System ||
-                    (dir.Attributes & FileAttributes.Hidden) == FileAttributes.Hidden)
+                // Skip problematic system directories
+                var skipDirs = new[] {
+            "System Volume Information", "Recovery", "$Recycle.Bin",
+            "Windows\\System32", "Windows\\SysWOW64", "ProgramData\\Microsoft\\Windows\\WER"
+        };
+
+                if (skipDirs.Any(skip => dir.FullName.Contains(skip, StringComparison.OrdinalIgnoreCase)))
+                    return;
+
+                // Skip hidden/system directories unless they're in user space
+                var isUserSpace = dir.FullName.StartsWith(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    StringComparison.OrdinalIgnoreCase);
+
+                if (!isUserSpace && ((dir.Attributes & FileAttributes.System) == FileAttributes.System ||
+                    (dir.Attributes & FileAttributes.Hidden) == FileAttributes.Hidden))
                     return;
 
                 // Add directory to list
@@ -394,31 +468,50 @@ namespace FastFileSearch
                     var files = dir.GetFiles();
                     foreach (var file in files)
                     {
+                        // Skip system files unless in user space
+                        if (!isUserSpace && (file.Attributes & FileAttributes.System) == FileAttributes.System)
+                            continue;
+
                         allFiles.Add(file);
                     }
                 }
-                catch (Exception) { }
+                catch (UnauthorizedAccessException)
+                {
+                    // Skip directories we can't access
+                }
+                catch (Exception ex)
+                {
+                    // Log other errors but continue
+                    System.Diagnostics.Debug.WriteLine($"Error accessing files in {dir.FullName}: {ex.Message}");
+                }
 
                 // Recursively index subdirectories
                 try
                 {
                     var subDirs = dir.GetDirectories();
-                    Parallel.ForEach(subDirs, subDir =>
+                    foreach (var subDir in subDirs)
                     {
-                        // Skip some system directories but allow more access
+                        // Additional safety checks
                         if (subDir.Name.StartsWith("$") ||
-                            subDir.Name == "System Volume Information" ||
-                            subDir.Name == "Recovery")
-                            return;
+                            subDir.Name.Equals("System Volume Information", StringComparison.OrdinalIgnoreCase) ||
+                            subDir.Name.Equals("Recovery", StringComparison.OrdinalIgnoreCase))
+                            continue;
 
                         IndexDirectory(subDir);
-                    });
+                    }
                 }
-                catch (Exception) { }
+                catch (UnauthorizedAccessException)
+                {
+                    // Skip directories we can't access
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Error accessing subdirectories in {dir.FullName}: {ex.Message}");
+                }
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // Skip directories we can't access
+                System.Diagnostics.Debug.WriteLine($"Error indexing directory {dir.FullName}: {ex.Message}");
             }
         }
 
@@ -469,11 +562,63 @@ namespace FastFileSearch
             // Update progress if needed
         }
 
+        private void TestIndexing()
+        {
+            if (allFiles.Count == 0 && allDirectories.Count == 0)
+            {
+                statusLabel.Text = "No files indexed. Try running as administrator or check permissions.";
+
+                // Provide a simple fallback - index current directory
+                try
+                {
+                    var currentDir = new DirectoryInfo(Application.StartupPath);
+                    IndexDirectory(currentDir);
+
+                    if (allFiles.Count > 0 || allDirectories.Count > 0)
+                    {
+                        statusLabel.Text = $"Indexed current directory: {allFiles.Count} files, {allDirectories.Count} directories";
+                    }
+                }
+                catch (Exception ex)
+                {
+                    statusLabel.Text = $"Error: {ex.Message}";
+                }
+            }
+        }
+
         private void SearchWorker_RunWorkerCompleted(object sender, RunWorkerCompletedEventArgs e)
         {
             isSearching = false;
-            statusLabel.Text = $"Ready - Indexed {allFiles.Count} files and {allDirectories.Count} directories";
+
+            if (e.Error != null)
+            {
+                statusLabel.Text = $"Indexing failed: {e.Error.Message}";
+                MessageBox.Show($"Indexing error: {e.Error.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            else
+            {
+                statusLabel.Text = $"Ready - Indexed {allFiles.Count} files and {allDirectories.Count} directories";
+
+                // Test if indexing actually worked
+                if (allFiles.Count == 0 && allDirectories.Count == 0)
+                {
+                    // TestIndexing();
+                    IndexFiles();
+                }
+            }
         }
+
+        private void RefreshIndex()
+{
+    allFiles = new ConcurrentBag<FileInfo>();
+    allDirectories = new ConcurrentBag<DirectoryInfo>();
+    
+    if (!searchWorker.IsBusy)
+    {
+        statusLabel.Text = "Re-indexing files...";
+        searchWorker.RunWorkerAsync("index");
+    }
+}
 
         private void listView1_DoubleClick(object sender, EventArgs e)
         {
