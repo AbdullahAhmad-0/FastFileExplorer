@@ -13,6 +13,8 @@ using System.Drawing.Imaging;
 using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 using Microsoft.VisualBasic;
+using System.Runtime.InteropServices;
+// using Shell32;
 
 namespace FastFileSearch
 {
@@ -29,6 +31,9 @@ namespace FastFileSearch
         private bool matchDiacritics = false;
         private bool enableRegex = false;
         private string currentFilter = "Everything";
+
+        private Dictionary<string, int> iconCache = new Dictionary<string, int>();
+        private const int THUMBNAIL_SIZE = 32;
 
         public MainForm()
         {
@@ -54,8 +59,21 @@ namespace FastFileSearch
             listView1.FullRowSelect = true;
             listView1.GridLines = true;
             listView1.MultiSelect = true;
-            listView1.SmallImageList = imageList1;
-            listView1.LargeImageList = imageList1;
+
+            // Create separate image lists for different sizes
+            var smallImageList = new ImageList();
+            smallImageList.ImageSize = new Size(16, 16);
+            smallImageList.ColorDepth = ColorDepth.Depth32Bit;
+
+            var largeImageList = new ImageList();
+            largeImageList.ImageSize = new Size(32, 32);
+            largeImageList.ColorDepth = ColorDepth.Depth32Bit;
+
+            listView1.SmallImageList = smallImageList;
+            listView1.LargeImageList = largeImageList;
+
+            // Use the larger one as default
+            imageList1 = largeImageList;
 
             // Add columns
             listView1.Columns.Add("Name", 200);
@@ -68,30 +86,156 @@ namespace FastFileSearch
             LoadSystemIcons();
         }
 
+        private async Task LoadThumbnailAsync(ListViewItem item, string filePath)
+        {
+            await Task.Run(() =>
+            {
+                try
+                {
+                    Image thumbnail = CreateImageThumbnail(filePath);
+                    if (thumbnail != null)
+                    {
+                        this.Invoke((Action)(() =>
+                        {
+                            if (item.ListView != null) // Check if item is still in ListView
+                            {
+                                string thumbKey = $"thumb_{Path.GetFileName(filePath)}_{DateTime.Now.Ticks}";
+                                imageList1.Images.Add(thumbKey, thumbnail);
+                                item.ImageKey = thumbKey;
+                            }
+                        }));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Error loading thumbnail async: {ex.Message}");
+                }
+            });
+        }
+
+        private Icon GetFolderIcon()
+        {
+            try
+            {
+                return GetSystemIcon("folder", true);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private Icon GetSystemIcon(string path, bool isFolder)
+        {
+            try
+            {
+                SHFILEINFO shfi = new SHFILEINFO();
+                uint flags = SHGFI_ICON | SHGFI_SMALLICON;
+
+                if (isFolder)
+                    flags |= SHGFI_USEFILEATTRIBUTES;
+
+                IntPtr hImg = SHGetFileInfo(path,
+                    isFolder ? FILE_ATTRIBUTE_DIRECTORY : 0,
+                    ref shfi,
+                    (uint)Marshal.SizeOf(shfi),
+                    flags);
+
+                if (hImg != IntPtr.Zero && shfi.hIcon != IntPtr.Zero)
+                {
+                    Icon icon = Icon.FromHandle(shfi.hIcon);
+                    Icon clonedIcon = (Icon)icon.Clone();
+                    DestroyIcon(shfi.hIcon);
+                    return clonedIcon;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error getting icon for {path}: {ex.Message}");
+            }
+            return null;
+        }
+
+        private Image GetThumbnail(string filePath)
+        {
+            try
+            {
+                string ext = Path.GetExtension(filePath).ToLower();
+
+                // For images, create thumbnail
+                if (IsPictureFile(ext))
+                {
+                    return CreateImageThumbnail(filePath);
+                }
+
+                // For videos, try to get thumbnail (basic implementation)
+                if (IsVideoFile(ext))
+                {
+                    return CreateVideoThumbnail(filePath);
+                }
+
+                return null;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error creating thumbnail for {filePath}: {ex.Message}");
+                return null;
+            }
+        }
+
+        private Image CreateImageThumbnail(string imagePath)
+        {
+            try
+            {
+                using (var image = Image.FromFile(imagePath))
+                {
+                    return image.GetThumbnailImage(THUMBNAIL_SIZE, THUMBNAIL_SIZE, null, IntPtr.Zero);
+                }
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private Image CreateVideoThumbnail(string videoPath)
+        {
+            // Basic video thumbnail - you might want to use a library like FFMpegCore for better results
+            try
+            {
+                var videoIcon = GetSystemIcon(videoPath, false);
+                if (videoIcon != null)
+                {
+                    return videoIcon.ToBitmap();
+                }
+            }
+            catch
+            {
+                // Fall back to default icon
+            }
+            return null;
+        }
+
         private void LoadSystemIcons()
         {
             try
             {
-                imageList1.ImageSize = new Size(16, 16);
+                imageList1.ImageSize = new Size(THUMBNAIL_SIZE, THUMBNAIL_SIZE);
                 imageList1.ColorDepth = ColorDepth.Depth32Bit;
 
-                // Add file type icons
-                imageList1.Images.Add("folder", SystemIcons.Exclamation.ToBitmap());
+                // Add default folder icon
+                var folderIcon = GetFolderIcon();
+                if (folderIcon != null)
+                {
+                    imageList1.Images.Add("folder", folderIcon);
+                }
+                else
+                {
+                    imageList1.Images.Add("folder", SystemIcons.Question.ToBitmap());
+                }
+
+                // Add default file icon
                 imageList1.Images.Add("file", SystemIcons.Application.ToBitmap());
-                imageList1.Images.Add("txt", SystemIcons.Information.ToBitmap());
-                imageList1.Images.Add("doc", SystemIcons.Application.ToBitmap());
-                imageList1.Images.Add("pdf", SystemIcons.Application.ToBitmap());
-                imageList1.Images.Add("exe", SystemIcons.Application.ToBitmap());
-                imageList1.Images.Add("jpg", SystemIcons.Information.ToBitmap());
-                imageList1.Images.Add("png", SystemIcons.Information.ToBitmap());
-                imageList1.Images.Add("gif", SystemIcons.Information.ToBitmap());
-                imageList1.Images.Add("bmp", SystemIcons.Information.ToBitmap());
-                imageList1.Images.Add("mp3", SystemIcons.Asterisk.ToBitmap());
-                imageList1.Images.Add("wav", SystemIcons.Asterisk.ToBitmap());
-                imageList1.Images.Add("mp4", SystemIcons.Asterisk.ToBitmap());
-                imageList1.Images.Add("avi", SystemIcons.Asterisk.ToBitmap());
-                imageList1.Images.Add("zip", SystemIcons.Warning.ToBitmap());
-                imageList1.Images.Add("rar", SystemIcons.Warning.ToBitmap());
             }
             catch (Exception ex)
             {
@@ -282,6 +426,92 @@ namespace FastFileSearch
             return videoExts.Contains(ext.ToLower());
         }
 
+        private string GetOrCreateIconKey(string filePath, string extension)
+        {
+            string ext = extension.ToLower();
+
+            // Check if we already have this icon cached
+            if (iconCache.ContainsKey(ext))
+            {
+                return iconCache[ext].ToString();
+            }
+
+            // Try to get thumbnail first for images/videos
+            Image thumbnail = GetThumbnail(filePath);
+            if (thumbnail != null)
+            {
+                string thumbKey = $"thumb_{iconCache.Count}";
+                imageList1.Images.Add(thumbKey, thumbnail);
+                iconCache[ext] = iconCache.Count;
+                return thumbKey;
+            }
+
+            // Get system icon for this file type
+            Icon icon = GetSystemIcon(filePath, false);
+            if (icon != null)
+            {
+                string iconKey = $"icon_{iconCache.Count}";
+                imageList1.Images.Add(iconKey, icon.ToBitmap());
+                iconCache[ext] = iconCache.Count;
+                icon.Dispose();
+                return iconKey;
+            }
+
+            // Fall back to default file icon
+            return "file";
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct SHFILEINFO
+        {
+            public IntPtr hIcon;
+            public int iIcon;
+            public uint dwAttributes;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+            public string szDisplayName;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 80)]
+            public string szTypeName;
+        }
+
+        [DllImport("shell32.dll")]
+        private static extern IntPtr SHGetFileInfo(string pszPath, uint dwFileAttributes, ref SHFILEINFO psfi, uint cbSizeFileInfo, uint uFlags);
+
+        [DllImport("user32.dll")]
+        private static extern bool DestroyIcon(IntPtr handle);
+
+        [DllImport("shell32.dll", CharSet = CharSet.Auto)]
+        private static extern bool ShellExecuteEx(ref SHELLEXECUTEINFO lpExecInfo);
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+        private struct SHELLEXECUTEINFO
+        {
+            public int cbSize;
+            public uint fMask;
+            public IntPtr hwnd;
+            [MarshalAs(UnmanagedType.LPTStr)]
+            public string lpVerb;
+            [MarshalAs(UnmanagedType.LPTStr)]
+            public string lpFile;
+            [MarshalAs(UnmanagedType.LPTStr)]
+            public string lpParameters;
+            [MarshalAs(UnmanagedType.LPTStr)]
+            public string lpDirectory;
+            public int nShow;
+            public IntPtr hInstApp;
+            public IntPtr lpIDList;
+            [MarshalAs(UnmanagedType.LPTStr)]
+            public string lpClass;
+            public IntPtr hkeyClass;
+            public uint dwHotKey;
+            public IntPtr hIcon;
+            public IntPtr hProcess;
+        }
+
+        private const uint SHGFI_ICON = 0x100;
+        private const uint SHGFI_SMALLICON = 0x1;
+        private const uint SHGFI_USEFILEATTRIBUTES = 0x10;
+        private const uint FILE_ATTRIBUTE_DIRECTORY = 0x10;
+
         private ListViewItem CreateListViewItem(FileInfo file)
         {
             var item = new ListViewItem(file.Name);
@@ -290,7 +520,17 @@ namespace FastFileSearch
             item.SubItems.Add(file.Extension.ToUpper() + " File");
             item.SubItems.Add(FormatFileSize(file.Length));
             item.Tag = file;
-            item.ImageKey = GetIconKey(file.Extension);
+
+            // Set icon/thumbnail
+            string iconKey = GetOrCreateIconKey(file.FullName, file.Extension);
+            item.ImageKey = iconKey;
+
+            // Load thumbnail asynchronously for image files
+            if (IsPictureFile(file.Extension))
+            {
+                Task.Run(() => LoadThumbnailAsync(item, file.FullName));
+            }
+
             return item;
         }
 
@@ -363,51 +603,17 @@ namespace FastFileSearch
                     statusLabel.Text = "Starting file indexing...";
                 }));
 
-                // Start with user directories first (more likely to succeed)
-                var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-                var desktop = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
-                var documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-                var downloads = Path.Combine(userProfile, "Downloads");
-
-                // Index common user directories first
-                var userDirs = new List<string> { userProfile, desktop, documents };
-                if (Directory.Exists(downloads)) userDirs.Add(downloads);
-
-                foreach (var dir in userDirs)
-                {
-                    try
-                    {
-                        if (Directory.Exists(dir))
-                        {
-                            IndexDirectory(new DirectoryInfo(dir));
-
-                            // Update UI with progress
-                            this.Invoke((Action)(() =>
-                            {
-                                statusLabel.Text = $"Indexing... Found {allFiles.Count} files, {allDirectories.Count} directories";
-                            }));
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        // Log the specific error
-                        this.Invoke((Action)(() =>
-                        {
-                            statusLabel.Text = $"Warning: Could not index {dir} - {ex.Message}";
-                        }));
-                    }
-                }
-
-                // Then try system drives (C:, D:, etc.) - skip if no permission
-                var drives = DriveInfo.GetDrives().Where(d => d.IsReady && d.DriveType == DriveType.Fixed).ToList();
+                // Get all drives first
+                var drives = DriveInfo.GetDrives().Where(d => d.IsReady).ToList();
 
                 foreach (var drive in drives)
                 {
                     try
                     {
-                        // Skip if we already indexed this drive via user directories
-                        if (userDirs.Any(ud => ud.StartsWith(drive.Name, StringComparison.OrdinalIgnoreCase)))
-                            continue;
+                        this.Invoke((Action)(() =>
+                        {
+                            statusLabel.Text = $"Indexing drive {drive.Name}...";
+                        }));
 
                         IndexDirectory(drive.RootDirectory);
 
@@ -430,11 +636,10 @@ namespace FastFileSearch
                 this.Invoke((Action)(() =>
                 {
                     statusLabel.Text = $"Indexing error: {ex.Message}";
-                    MessageBox.Show($"Error during file indexing: {ex.Message}\n\nTry running as administrator for full system access.",
-                        "Indexing Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }));
             }
         }
+
 
         private void IndexDirectory(DirectoryInfo dir)
         {
@@ -442,21 +647,13 @@ namespace FastFileSearch
             {
                 if (searchWorker.CancellationPending) return;
 
-                // Skip problematic system directories
+                // Skip only critical system directories
                 var skipDirs = new[] {
-            "System Volume Information", "Recovery", "$Recycle.Bin",
-            "Windows\\System32", "Windows\\SysWOW64", "ProgramData\\Microsoft\\Windows\\WER"
+            "System Volume Information", "$Recycle.Bin", "Recovery",
+            "Config.Msi", "Windows\\CSC", "Windows\\Installer"
         };
 
-                if (skipDirs.Any(skip => dir.FullName.Contains(skip, StringComparison.OrdinalIgnoreCase)))
-                    return;
-
-                // Skip hidden/system directories unless they're in user space
-                var isUserSpace = dir.FullName.StartsWith(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                    StringComparison.OrdinalIgnoreCase);
-
-                if (!isUserSpace && ((dir.Attributes & FileAttributes.System) == FileAttributes.System ||
-                    (dir.Attributes & FileAttributes.Hidden) == FileAttributes.Hidden))
+                if (skipDirs.Any(skip => dir.FullName.EndsWith(skip, StringComparison.OrdinalIgnoreCase)))
                     return;
 
                 // Add directory to list
@@ -468,10 +665,6 @@ namespace FastFileSearch
                     var files = dir.GetFiles();
                     foreach (var file in files)
                     {
-                        // Skip system files unless in user space
-                        if (!isUserSpace && (file.Attributes & FileAttributes.System) == FileAttributes.System)
-                            continue;
-
                         allFiles.Add(file);
                     }
                 }
@@ -481,7 +674,6 @@ namespace FastFileSearch
                 }
                 catch (Exception ex)
                 {
-                    // Log other errors but continue
                     System.Diagnostics.Debug.WriteLine($"Error accessing files in {dir.FullName}: {ex.Message}");
                 }
 
@@ -491,12 +683,6 @@ namespace FastFileSearch
                     var subDirs = dir.GetDirectories();
                     foreach (var subDir in subDirs)
                     {
-                        // Additional safety checks
-                        if (subDir.Name.StartsWith("$") ||
-                            subDir.Name.Equals("System Volume Information", StringComparison.OrdinalIgnoreCase) ||
-                            subDir.Name.Equals("Recovery", StringComparison.OrdinalIgnoreCase))
-                            continue;
-
                         IndexDirectory(subDir);
                     }
                 }
@@ -609,16 +795,16 @@ namespace FastFileSearch
         }
 
         private void RefreshIndex()
-{
-    allFiles = new ConcurrentBag<FileInfo>();
-    allDirectories = new ConcurrentBag<DirectoryInfo>();
-    
-    if (!searchWorker.IsBusy)
-    {
-        statusLabel.Text = "Re-indexing files...";
-        searchWorker.RunWorkerAsync("index");
-    }
-}
+        {
+            allFiles = new ConcurrentBag<FileInfo>();
+            allDirectories = new ConcurrentBag<DirectoryInfo>();
+
+            if (!searchWorker.IsBusy)
+            {
+                statusLabel.Text = "Re-indexing files...";
+                searchWorker.RunWorkerAsync("index");
+            }
+        }
 
         private void listView1_DoubleClick(object sender, EventArgs e)
         {
@@ -681,10 +867,69 @@ namespace FastFileSearch
             CopySelectedItems();
         }
 
+        private void showInExplorerContextMenuItem_Click(object sender, EventArgs e)
+        {
+            if (listView1.SelectedItems.Count > 0)
+            {
+                var selectedItem = listView1.SelectedItems[0];
+                try
+                {
+                    if (selectedItem.Tag is FileInfo file)
+                    {
+                        Process.Start("explorer.exe", $"/select,\"{file.FullName}\"");
+                    }
+                    else if (selectedItem.Tag is DirectoryInfo dir)
+                    {
+                        Process.Start("explorer.exe", $"\"{dir.FullName}\"");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"Error opening in Explorer: {ex.Message}");
+                }
+            }
+        }
+
+        private string GetCurrentDirectory()
+        {
+            if (listView1.SelectedItems.Count > 0)
+            {
+                var selectedItem = listView1.SelectedItems[0];
+                if (selectedItem.Tag is FileInfo file)
+                    return file.DirectoryName;
+                else if (selectedItem.Tag is DirectoryInfo dir)
+                    return dir.FullName;
+            }
+            return Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
+        }
+
         private void pasteToolStripMenuItem_Click(object sender, EventArgs e)
         {
-            // Paste functionality would be implemented here
-            MessageBox.Show("Paste functionality not implemented in this demo.");
+            try
+            {
+                if (Clipboard.ContainsText())
+                {
+                    var paths = Clipboard.GetText().Split('\n');
+                    var targetDir = GetCurrentDirectory();
+
+                    foreach (var path in paths)
+                    {
+                        if (File.Exists(path))
+                        {
+                            var fileName = Path.GetFileName(path);
+                            var targetPath = Path.Combine(targetDir, fileName);
+                            File.Copy(path, targetPath, true);
+                        }
+                    }
+
+                    MessageBox.Show($"Pasted {paths.Length} items", "Paste Complete");
+                    RefreshIndex();
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error pasting: {ex.Message}");
+            }
         }
 
         private void selectAllToolStripMenuItem_Click(object sender, EventArgs e)
@@ -862,27 +1107,32 @@ namespace FastFileSearch
             if (listView1.SelectedItems.Count == 1)
             {
                 var selectedItem = listView1.SelectedItems[0];
-                string info = "";
 
                 if (selectedItem.Tag is FileInfo file)
                 {
-                    info = $"File: {file.Name}\n" +
-                           $"Path: {file.FullName}\n" +
-                           $"Size: {FormatFileSize(file.Length)}\n" +
-                           $"Created: {file.CreationTime}\n" +
-                           $"Modified: {file.LastWriteTime}\n" +
-                           $"Attributes: {file.Attributes}";
+                    try
+                    {
+                        // Show Windows properties dialog
+                        SHELLEXECUTEINFO info = new SHELLEXECUTEINFO();
+                        info.cbSize = Marshal.SizeOf(info);
+                        info.lpVerb = "properties";
+                        info.lpFile = file.FullName;
+                        info.nShow = 1;
+                        info.fMask = 0x0000000C;
+                        ShellExecuteEx(ref info);
+                    }
+                    catch
+                    {
+                        // Fallback to custom dialog
+                        string infoText = $"File: {file.Name}\n" +
+                                       $"Path: {file.FullName}\n" +
+                                       $"Size: {FormatFileSize(file.Length)}\n" +
+                                       $"Created: {file.CreationTime}\n" +
+                                       $"Modified: {file.LastWriteTime}\n" +
+                                       $"Attributes: {file.Attributes}";
+                        MessageBox.Show(infoText, "Properties", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
                 }
-                else if (selectedItem.Tag is DirectoryInfo dir)
-                {
-                    info = $"Folder: {dir.Name}\n" +
-                           $"Path: {dir.FullName}\n" +
-                           $"Created: {dir.CreationTime}\n" +
-                           $"Modified: {dir.LastWriteTime}\n" +
-                           $"Attributes: {dir.Attributes}";
-                }
-
-                MessageBox.Show(info, "Properties", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
         }
 

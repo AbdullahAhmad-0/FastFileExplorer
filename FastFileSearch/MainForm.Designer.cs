@@ -18,6 +18,8 @@
         private System.Windows.Forms.ToolStripMenuItem videoToolStripMenuItem;
         private System.Windows.Forms.ToolStripMenuItem searchToolStripMenuItem;
         private System.Windows.Forms.ToolStripMenuItem filterToolStripMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem showInExplorerContextMenuItem;
+
         private System.Windows.Forms.ToolStripSeparator toolStripSeparator1;
         private System.Windows.Forms.ToolStripSeparator toolStripSeparator3;
 
@@ -416,12 +418,18 @@
             // 
             columnSize.Text = "Size";
             columnSize.Width = 100;
+
+            this.showInExplorerContextMenuItem = new ToolStripMenuItem();
+            this.showInExplorerContextMenuItem.Text = "Show in Explorer";
+            this.showInExplorerContextMenuItem.Click += new EventHandler(this.showInExplorerContextMenuItem_Click);
+
             // 
             // contextMenuStrip1
             // 
-            contextMenuStrip1.Items.AddRange(new ToolStripItem[] { openContextMenuItem, openWithContextMenuItem, toolStripSeparator4, cutContextMenuItem, copyContextMenuItem, toolStripSeparator5, deleteContextMenuItem, renameContextMenuItem, toolStripSeparator6, propertiesContextMenuItem });
+            contextMenuStrip1.Items.AddRange(new ToolStripItem[] { openContextMenuItem, openWithContextMenuItem, toolStripSeparator4, cutContextMenuItem, copyContextMenuItem, toolStripSeparator5, deleteContextMenuItem, renameContextMenuItem, toolStripSeparator6, this.showInExplorerContextMenuItem, propertiesContextMenuItem });
             contextMenuStrip1.Name = "contextMenuStrip1";
             contextMenuStrip1.Size = new Size(132, 176);
+
             // 
             // openContextMenuItem
             // 
