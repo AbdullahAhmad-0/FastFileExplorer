@@ -89,6 +89,7 @@
             deleteContextMenuItem = new ToolStripMenuItem();
             renameContextMenuItem = new ToolStripMenuItem();
             toolStripSeparator6 = new ToolStripSeparator();
+            showInExplorerContextMenuItem = new ToolStripMenuItem();
             propertiesContextMenuItem = new ToolStripMenuItem();
             imageList1 = new ImageList(components);
             statusStrip1 = new StatusStrip();
@@ -418,80 +419,81 @@
             // 
             columnSize.Text = "Size";
             columnSize.Width = 100;
-
-            this.showInExplorerContextMenuItem = new ToolStripMenuItem();
-            this.showInExplorerContextMenuItem.Text = "Show in Explorer";
-            this.showInExplorerContextMenuItem.Click += new EventHandler(this.showInExplorerContextMenuItem_Click);
-
             // 
             // contextMenuStrip1
             // 
-            contextMenuStrip1.Items.AddRange(new ToolStripItem[] { openContextMenuItem, openWithContextMenuItem, toolStripSeparator4, cutContextMenuItem, copyContextMenuItem, toolStripSeparator5, deleteContextMenuItem, renameContextMenuItem, toolStripSeparator6, this.showInExplorerContextMenuItem, propertiesContextMenuItem });
+            contextMenuStrip1.Items.AddRange(new ToolStripItem[] { openContextMenuItem, openWithContextMenuItem, toolStripSeparator4, cutContextMenuItem, copyContextMenuItem, toolStripSeparator5, deleteContextMenuItem, renameContextMenuItem, toolStripSeparator6, showInExplorerContextMenuItem, propertiesContextMenuItem });
             contextMenuStrip1.Name = "contextMenuStrip1";
-            contextMenuStrip1.Size = new Size(132, 176);
-
+            contextMenuStrip1.Size = new Size(163, 198);
             // 
             // openContextMenuItem
             // 
             openContextMenuItem.Name = "openContextMenuItem";
-            openContextMenuItem.Size = new Size(131, 22);
+            openContextMenuItem.Size = new Size(162, 22);
             openContextMenuItem.Text = "&Open";
             openContextMenuItem.Click += openContextMenuItem_Click;
             // 
             // openWithContextMenuItem
             // 
             openWithContextMenuItem.Name = "openWithContextMenuItem";
-            openWithContextMenuItem.Size = new Size(131, 22);
+            openWithContextMenuItem.Size = new Size(162, 22);
             openWithContextMenuItem.Text = "Open &With";
             openWithContextMenuItem.Click += openWithContextMenuItem_Click;
             // 
             // toolStripSeparator4
             // 
             toolStripSeparator4.Name = "toolStripSeparator4";
-            toolStripSeparator4.Size = new Size(128, 6);
+            toolStripSeparator4.Size = new Size(159, 6);
             // 
             // cutContextMenuItem
             // 
             cutContextMenuItem.Name = "cutContextMenuItem";
-            cutContextMenuItem.Size = new Size(131, 22);
+            cutContextMenuItem.Size = new Size(162, 22);
             cutContextMenuItem.Text = "Cu&t";
             cutContextMenuItem.Click += cutContextMenuItem_Click;
             // 
             // copyContextMenuItem
             // 
             copyContextMenuItem.Name = "copyContextMenuItem";
-            copyContextMenuItem.Size = new Size(131, 22);
+            copyContextMenuItem.Size = new Size(162, 22);
             copyContextMenuItem.Text = "&Copy";
             copyContextMenuItem.Click += copyContextMenuItem_Click;
             // 
             // toolStripSeparator5
             // 
             toolStripSeparator5.Name = "toolStripSeparator5";
-            toolStripSeparator5.Size = new Size(128, 6);
+            toolStripSeparator5.Size = new Size(159, 6);
             // 
             // deleteContextMenuItem
             // 
             deleteContextMenuItem.Name = "deleteContextMenuItem";
-            deleteContextMenuItem.Size = new Size(131, 22);
+            deleteContextMenuItem.Size = new Size(162, 22);
             deleteContextMenuItem.Text = "&Delete";
             deleteContextMenuItem.Click += deleteContextMenuItem_Click;
             // 
             // renameContextMenuItem
             // 
             renameContextMenuItem.Name = "renameContextMenuItem";
-            renameContextMenuItem.Size = new Size(131, 22);
+            renameContextMenuItem.Size = new Size(162, 22);
             renameContextMenuItem.Text = "&Rename";
             renameContextMenuItem.Click += renameContextMenuItem_Click;
             // 
             // toolStripSeparator6
             // 
             toolStripSeparator6.Name = "toolStripSeparator6";
-            toolStripSeparator6.Size = new Size(128, 6);
+            toolStripSeparator6.Size = new Size(159, 6);
+            // 
+            // showInExplorerContextMenuItem
+            // 
+            showInExplorerContextMenuItem.Name = "showInExplorerContextMenuItem";
+            showInExplorerContextMenuItem.Size = new Size(162, 22);
+            showInExplorerContextMenuItem.Text = "Show in Explorer";
+            showInExplorerContextMenuItem.Click += showInExplorerContextMenuItem_Click;
             // 
             // propertiesContextMenuItem
             // 
             propertiesContextMenuItem.Name = "propertiesContextMenuItem";
-            propertiesContextMenuItem.Size = new Size(131, 22);
+            propertiesContextMenuItem.Size = new Size(162, 22);
             propertiesContextMenuItem.Text = "&Properties";
             propertiesContextMenuItem.Click += propertiesContextMenuItem_Click;
             // 

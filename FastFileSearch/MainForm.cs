@@ -31,6 +31,10 @@ namespace FastFileSearch
         private bool matchDiacritics = false;
         private bool enableRegex = false;
         private string currentFilter = "Everything";
+        private BackgroundWorker indexWorker;
+        private BackgroundWorker searchBackgroundWorker;
+        private CancellationTokenSource searchCancellationTokenSource;
+
 
         private Dictionary<string, int> iconCache = new Dictionary<string, int>();
         private const int THUMBNAIL_SIZE = 32;
@@ -46,13 +50,19 @@ namespace FastFileSearch
             allFiles = new ConcurrentBag<FileInfo>();
             allDirectories = new ConcurrentBag<DirectoryInfo>();
 
-            // Initialize background worker for file searching
-            searchWorker = new BackgroundWorker();
-            searchWorker.WorkerReportsProgress = true;
-            searchWorker.WorkerSupportsCancellation = true;
-            searchWorker.DoWork += SearchWorker_DoWork;
-            searchWorker.ProgressChanged += SearchWorker_ProgressChanged;
-            searchWorker.RunWorkerCompleted += SearchWorker_RunWorkerCompleted;
+            // Initialize background worker for file indexing
+            indexWorker = new BackgroundWorker();
+            indexWorker.WorkerReportsProgress = true;
+            indexWorker.WorkerSupportsCancellation = true;
+            indexWorker.DoWork += IndexWorker_DoWork;
+            indexWorker.ProgressChanged += IndexWorker_ProgressChanged;
+            indexWorker.RunWorkerCompleted += IndexWorker_RunWorkerCompleted;
+
+            // Initialize background worker for searching
+            searchBackgroundWorker = new BackgroundWorker();
+            searchBackgroundWorker.WorkerSupportsCancellation = true;
+            searchBackgroundWorker.DoWork += SearchBackgroundWorker_DoWork;
+            searchBackgroundWorker.RunWorkerCompleted += SearchBackgroundWorker_RunWorkerCompleted;
 
             // Set up ListView
             listView1.View = View.Details;
@@ -252,10 +262,130 @@ namespace FastFileSearch
             Text = $"Fast File Search - Running as: {Environment.UserName}";
 
             // Start indexing files in background
-            if (!searchWorker.IsBusy)
+            //if (!searchWorker.IsBusy)
+            //{
+            statusLabel.Text = "Indexing files...";
+            indexWorker.RunWorkerAsync();
+            //}
+        }
+
+        private void IndexWorker_DoWork(object sender, DoWorkEventArgs e)
+        {
+            var worker = sender as BackgroundWorker;
+
+            try
             {
-                statusLabel.Text = "Indexing files...";
-                searchWorker.RunWorkerAsync("index");
+                var drives = DriveInfo.GetDrives().Where(d => d.IsReady).ToList();
+                int driveCount = 0;
+
+                foreach (var drive in drives)
+                {
+                    if (worker.CancellationPending)
+                    {
+                        e.Cancel = true;
+                        return;
+                    }
+
+                    try
+                    {
+                        worker.ReportProgress((driveCount * 100) / drives.Count, $"Indexing drive {drive.Name}...");
+                        IndexDirectoryThreadSafe(drive.RootDirectory, worker);
+                        driveCount++;
+                    }
+                    catch (Exception ex)
+                    {
+                        worker.ReportProgress(-1, $"Warning: Could not index drive {drive.Name} - {ex.Message}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                worker.ReportProgress(-1, $"Indexing error: {ex.Message}");
+            }
+        }
+
+        private void IndexDirectoryThreadSafe(DirectoryInfo dir, BackgroundWorker worker)
+        {
+            try
+            {
+                if (worker?.CancellationPending == true) return;
+
+                var skipDirs = new[] {
+            "System Volume Information", "$Recycle.Bin", "Recovery",
+            "Config.Msi", "Windows\\CSC", "Windows\\Installer"
+        };
+
+                if (skipDirs.Any(skip => dir.FullName.EndsWith(skip, StringComparison.OrdinalIgnoreCase)))
+                    return;
+
+                allDirectories.Add(dir);
+
+                try
+                {
+                    var files = dir.GetFiles();
+                    Parallel.ForEach(files, file =>
+                    {
+                        if (worker?.CancellationPending != true)
+                        {
+                            allFiles.Add(file);
+                        }
+                    });
+                }
+                catch (UnauthorizedAccessException) { }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Error accessing files in {dir.FullName}: {ex.Message}");
+                }
+
+                try
+                {
+                    var subDirs = dir.GetDirectories();
+                    Parallel.ForEach(subDirs, new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount }, subDir =>
+                    {
+                        if (worker?.CancellationPending != true)
+                        {
+                            IndexDirectoryThreadSafe(subDir, worker);
+                        }
+                    });
+                }
+                catch (UnauthorizedAccessException) { }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Error accessing subdirectories in {dir.FullName}: {ex.Message}");
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error indexing directory {dir.FullName}: {ex.Message}");
+            }
+        }
+
+        private void IndexWorker_ProgressChanged(object sender, ProgressChangedEventArgs e)
+        {
+            if (e.UserState is string message)
+            {
+                statusLabel.Text = message;
+                if (e.ProgressPercentage >= 0)
+                {
+                    statusLabel.Text += $" - Found {allFiles.Count} files, {allDirectories.Count} directories";
+                }
+            }
+        }
+
+        private void IndexWorker_RunWorkerCompleted(object sender, RunWorkerCompletedEventArgs e)
+        {
+            if (e.Cancelled)
+            {
+                statusLabel.Text = "Indexing cancelled";
+            }
+            else if (e.Error != null)
+            {
+                statusLabel.Text = $"Indexing failed: {e.Error.Message}";
+                MessageBox.Show($"Indexing error: {e.Error.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            else
+            {
+                statusLabel.Text = $"Ready - Indexed {allFiles.Count} files and {allDirectories.Count} directories";
             }
         }
 
@@ -289,70 +419,135 @@ namespace FastFileSearch
 
         private void PerformSearch()
         {
-            if (isSearching) return;
             if (string.IsNullOrEmpty(currentSearchTerm)) return;
 
+            // Cancel any existing search
+            searchCancellationTokenSource?.Cancel();
+            searchCancellationTokenSource = new CancellationTokenSource();
+
+            if (searchBackgroundWorker.IsBusy)
+            {
+                searchBackgroundWorker.CancelAsync();
+                return;
+            }
+
             listView1.Items.Clear();
-            var searchTerm = matchCase ? currentSearchTerm : currentSearchTerm.ToLower();
-            var results = new List<ListViewItem>();
+            statusLabel.Text = "Searching...";
+            searchBackgroundWorker.RunWorkerAsync(new SearchParameters
+            {
+                SearchTerm = currentSearchTerm,
+                MatchCase = matchCase,
+                MatchWholeWord = matchWholeWord,
+                MatchPath = matchPath,
+                EnableRegex = enableRegex,
+                Filter = currentFilter
+            });
+        }
+
+        private class SearchParameters
+        {
+            public string SearchTerm { get; set; }
+            public bool MatchCase { get; set; }
+            public bool MatchWholeWord { get; set; }
+            public bool MatchPath { get; set; }
+            public bool EnableRegex { get; set; }
+            public string Filter { get; set; }
+        }
+
+        private void SearchBackgroundWorker_DoWork(object sender, DoWorkEventArgs e)
+        {
+            var worker = sender as BackgroundWorker;
+            var parameters = e.Argument as SearchParameters;
+
+            if (parameters == null) return;
+
+            var searchTerm = parameters.MatchCase ? parameters.SearchTerm : parameters.SearchTerm.ToLower();
+            var results = new ConcurrentBag<ListViewItem>();
 
             try
             {
-                // Parallel search for better performance
-                var fileResults = new ConcurrentBag<ListViewItem>();
-                var dirResults = new ConcurrentBag<ListViewItem>();
-
                 // Search files in parallel
-                Parallel.ForEach(allFiles, file =>
+                Parallel.ForEach(allFiles, new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount }, file =>
                 {
-                    if (IsMatch(file.Name, file.FullName, searchTerm) && PassesFilter(file))
+                    if (worker.CancellationPending) return;
+
+                    if (IsMatch(file.Name, file.FullName, searchTerm, parameters) && PassesFilter(file, parameters.Filter))
                     {
                         var item = CreateListViewItem(file);
-                        fileResults.Add(item);
+                        results.Add(item);
                     }
                 });
 
                 // Search directories in parallel
-                Parallel.ForEach(allDirectories, dir =>
+                Parallel.ForEach(allDirectories, new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount }, dir =>
                 {
-                    if (IsMatch(dir.Name, dir.FullName, searchTerm) && PassesFilter(dir))
+                    if (worker.CancellationPending) return;
+
+                    if (IsMatch(dir.Name, dir.FullName, searchTerm, parameters) && PassesFilter(dir, parameters.Filter))
                     {
                         var item = CreateListViewItem(dir);
-                        dirResults.Add(item);
+                        results.Add(item);
                     }
                 });
 
-                // Combine results
-                results.AddRange(fileResults);
-                results.AddRange(dirResults);
+                if (worker.CancellationPending)
+                {
+                    e.Cancel = true;
+                    return;
+                }
 
-                // Sort results by name
-                results.Sort((x, y) => string.Compare(x.Text, y.Text, StringComparison.OrdinalIgnoreCase));
+                // Sort results
+                var sortedResults = results.OrderBy(x => x.Text, StringComparer.OrdinalIgnoreCase).ToArray();
+                e.Result = sortedResults;
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Search error: {ex.Message}");
+                e.Result = new Exception($"Search error: {ex.Message}");
+            }
+        }
+
+        private void SearchBackgroundWorker_RunWorkerCompleted(object sender, RunWorkerCompletedEventArgs e)
+        {
+            if (e.Cancelled)
+            {
+                statusLabel.Text = "Search cancelled";
                 return;
             }
 
-            // Add results to ListView
-            listView1.Items.AddRange(results.ToArray());
-            itemCountLabel.Text = $"{results.Count} items";
-            statusLabel.Text = $"Found {results.Count} items matching '{currentSearchTerm}'";
+            if (e.Error != null)
+            {
+                statusLabel.Text = $"Search error: {e.Error.Message}";
+                MessageBox.Show($"Search error: {e.Error.Message}");
+                return;
+            }
+
+            if (e.Result is Exception exception)
+            {
+                statusLabel.Text = exception.Message;
+                MessageBox.Show(exception.Message);
+                return;
+            }
+
+            if (e.Result is ListViewItem[] results)
+            {
+                listView1.Items.AddRange(results);
+                itemCountLabel.Text = $"{results.Length} items";
+                statusLabel.Text = $"Found {results.Length} items matching '{currentSearchTerm}'";
+            }
         }
 
-        private bool IsMatch(string fileName, string fullPath, string searchTerm)
+        private bool IsMatch(string fileName, string fullPath, string searchTerm, SearchParameters parameters)
         {
-            string searchIn = matchPath ? fullPath : fileName;
+            string searchIn = parameters.MatchPath ? fullPath : fileName;
 
-            if (!matchCase)
+            if (!parameters.MatchCase)
                 searchIn = searchIn.ToLower();
 
-            if (enableRegex)
+            if (parameters.EnableRegex)
             {
                 try
                 {
-                    var options = matchCase ? RegexOptions.None : RegexOptions.IgnoreCase;
+                    var options = parameters.MatchCase ? RegexOptions.None : RegexOptions.IgnoreCase;
                     return Regex.IsMatch(searchIn, searchTerm, options);
                 }
                 catch
@@ -361,18 +556,18 @@ namespace FastFileSearch
                 }
             }
 
-            if (matchWholeWord)
+            if (parameters.MatchWholeWord)
             {
                 var words = searchIn.Split(' ', '\t', '.', '-', '_');
-                return words.Any(word => word.Equals(searchTerm, matchCase ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase));
+                return words.Any(word => word.Equals(searchTerm, parameters.MatchCase ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase));
             }
 
             return searchIn.Contains(searchTerm);
         }
 
-        private bool PassesFilter(FileInfo file)
+        private bool PassesFilter(FileInfo file, string filter)
         {
-            switch (currentFilter)
+            switch (filter)
             {
                 case "Everything": return true;
                 case "Audio": return IsAudioFile(file.Extension);
@@ -385,9 +580,9 @@ namespace FastFileSearch
             }
         }
 
-        private bool PassesFilter(DirectoryInfo dir)
+        private bool PassesFilter(DirectoryInfo dir, string filter)
         {
-            return currentFilter == "Everything" || currentFilter == "Folder";
+            return filter == "Everything" || filter == "Folder";
         }
 
         private bool IsAudioFile(string ext)
@@ -796,14 +991,16 @@ namespace FastFileSearch
 
         private void RefreshIndex()
         {
+            if (indexWorker.IsBusy)
+            {
+                indexWorker.CancelAsync();
+            }
+
             allFiles = new ConcurrentBag<FileInfo>();
             allDirectories = new ConcurrentBag<DirectoryInfo>();
 
-            if (!searchWorker.IsBusy)
-            {
-                statusLabel.Text = "Re-indexing files...";
-                searchWorker.RunWorkerAsync("index");
-            }
+            statusLabel.Text = "Re-indexing files...";
+            indexWorker.RunWorkerAsync();
         }
 
         private void listView1_DoubleClick(object sender, EventArgs e)
@@ -1206,10 +1403,10 @@ namespace FastFileSearch
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            if (searchWorker != null && searchWorker.IsBusy)
-            {
-                searchWorker.CancelAsync();
-            }
+            indexWorker?.CancelAsync();
+            searchBackgroundWorker?.CancelAsync();
+            searchCancellationTokenSource?.Cancel();
+
             base.OnFormClosing(e);
         }
     }
